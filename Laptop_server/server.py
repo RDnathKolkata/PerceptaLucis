@@ -114,7 +114,7 @@
 
 
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 from ultralytics import YOLO
@@ -650,6 +650,47 @@ async def calibrate_camera(
         "message": f"Add CAMERA_FOCAL_LENGTH_PX={focal_length:.2f} to your .env file"
     }
 
+@app.post("/fall_alert")
+async def fall_alert(request: Request):
+    """
+    Receive fall detection alert from ESP32-3 (Fall Detection Unit)
+    
+    Expected payload:
+    {
+        "event": "fall_detected",
+        "timestamp": 12345
+    }
+    """
+    try:
+        data = await request.json()
+        
+        print("\n🚨 ═══════════════════════════════════════")
+        print("🚨 FALL DETECTED!")
+        print("🚨 ═══════════════════════════════════════")
+        print(f"   Timestamp: {data.get('timestamp', 0)}ms")
+        print(f"   Event: {data.get('event', 'fall_detected')}")
+        print(f"   Time: {time.strftime('%H:%M:%S')}")
+        
+        # Trigger audio alert using ASYNC HTTP (improved!)
+        if app.state.esp32_client.enabled:
+            success = await app.state.esp32_client.send_alert(
+                "emergency",
+                0.0,
+                "fall_alert"
+            )
+            if success:
+                print(f"   ✅ Emergency alert sent to audio unit")
+            else:
+                print(f"   ⚠️  Failed to send emergency alert")
+        
+        print("🚨 ═══════════════════════════════════════\n")
+        
+        return {"success": True, "message": "Fall alert logged"}
+        
+    except Exception as e:
+        print(f"❌ Error processing fall alert: {e}")
+        return {"success": False, "error": str(e)}
+    
 #  MAIN ENTRY POINT
 
 if __name__ == "__main__":
