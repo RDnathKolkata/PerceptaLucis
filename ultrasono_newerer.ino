@@ -452,3 +452,6 @@ void loop() {
     if (distance3 > 0 && distance3 <= 50) sendObstacleAlert(SENSOR_RIGHT, distance3);
   }
 }
+
+
+// test
