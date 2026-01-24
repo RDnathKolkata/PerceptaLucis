@@ -1,0 +1,25 @@
+# Core Dependencies
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# YOLO and Computer Vision
+ultralytics==8.1.0
+opencv-python==4.9.0.80
+pillow==10.2.0
+
+# Async HTTP Client (replaces requests)
+httpx==0.26.0
+
+# Configuration Management
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# Additional utilities
+numpy==1.26.3
+
+#Check for other dependencies if needed, ig OpenCV will be needed.... just pip install stuff if needed 
+#this file is stupid anyway
+#DO NOT pip install STUFF TILL I EXPLICITLY TELL YOU TO DO SO.... EVEN requirements.txt
+#Might add more dependencies later
