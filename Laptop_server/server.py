@@ -664,9 +664,9 @@ async def fall_alert(request: Request):
     try:
         data = await request.json()
         
-        print("\n🚨 ═══════════════════════════════════════")
-        print("🚨 FALL DETECTED!")
-        print("🚨 ═══════════════════════════════════════")
+        print("\n ═══════════════════════════════════════")
+        print(" FALL DETECTED!")
+        print(" ═══════════════════════════════════════")
         print(f"   Timestamp: {data.get('timestamp', 0)}ms")
         print(f"   Event: {data.get('event', 'fall_detected')}")
         print(f"   Time: {time.strftime('%H:%M:%S')}")
