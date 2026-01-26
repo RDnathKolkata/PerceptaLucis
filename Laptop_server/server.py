@@ -116,6 +116,7 @@
 
 from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.responses import JSONResponse
+from fastapi import HTTPException
 import uvicorn
 from ultralytics import YOLO
 from PIL import Image
@@ -129,6 +130,54 @@ from pydantic import Field
 from typing import Dict, Optional
 import asyncio
 from contextlib import asynccontextmanager
+from collections import defaultdict  
+from datetime import datetime, timedelta 
+import logging
+from logging.handlers import RotatingFileHandler
+
+# ═══════════════════════════════════════════════════════════════
+#  LOGGING CONFIGURATION (Claude's sugeestion)
+# ═══════════════════════════════════════════════════════════════
+
+def setup_logging():
+    """Configure application logging"""
+    # Create logs directory if it doesn't exist
+    import os
+    os.makedirs("logs", exist_ok=True)
+    
+    # Configure root logger
+    logger = logging.getLogger("yolo_server")
+    logger.setLevel(logging.INFO)
+    
+    # Console handler (colored output)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    console_handler.setFormatter(console_formatter)
+    
+    # File handler (rotating, 10MB max, keep 3 backups)
+    file_handler = RotatingFileHandler(
+        "logs/yolo_server.log",
+        maxBytes=10_000_000,
+        backupCount=3
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s'
+    )
+    file_handler.setFormatter(file_formatter)
+    
+    # Add handlers
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+# Initialize logger
+logger = setup_logging()
 
 #  CONFIGURATION MANAGEMENT
 
@@ -176,6 +225,52 @@ class Settings(BaseSettings):
 
 # Initialize settings
 settings = Settings()
+
+#Rate limiter
+
+class RateLimiter:
+    """Simple in-memory rate limiter"""
+    
+    def __init__(self, max_requests: int, window_seconds: int):
+        self.max_requests = max_requests
+        self.window = timedelta(seconds=window_seconds)
+        self.requests: Dict[str, list] = defaultdict(list)
+        self._lock = asyncio.Lock()
+    
+    async def check_rate_limit(self, client_id: str) -> bool:
+        """
+        Check if client has exceeded rate limit
+        
+        Returns:
+            True if allowed, False if rate limited
+        """
+        async with self._lock:
+            now = datetime.now()
+            
+            # Remove old requests outside the window
+            self.requests[client_id] = [
+                req_time for req_time in self.requests[client_id]
+                if now - req_time < self.window
+            ]
+            
+            # Check if under limit
+            if len(self.requests[client_id]) >= self.max_requests:
+                return False
+            
+            # Record this request
+            self.requests[client_id].append(now)
+            return True
+    
+    async def cleanup_old_clients(self):
+        """Remove clients with no recent requests"""
+        async with self._lock:
+            now = datetime.now()
+            stale_clients = [
+                client_id for client_id, requests in self.requests.items()
+                if not requests or now - requests[-1] > self.window * 2
+            ]
+            for client_id in stale_clients:
+                del self.requests[client_id]
 
 #  APPLICATION STATE MANAGEMENT
 
@@ -233,7 +328,7 @@ class ObjectMemory:
                 del self._memory[track_id]
             
             if stale_ids:
-                print(f"🧹 Cleaned up {len(stale_ids)} stale tracks")
+                logger.info(f"Cleaned up {len(stale_ids)} stale tracks")
     
     async def get_stats(self) -> dict:
         """Get memory statistics"""
@@ -318,7 +413,7 @@ class ESP32AlertClient:
             timeout=settings.esp32_timeout,
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
         )
-        print(f"🌐 ESP32 client initialized (URL: {settings.esp32_audio_url})")
+        logger.info(f"ESP32 client initialized (URL: {settings.esp32_audio_url})")
     
     async def stop(self):
         """Close async HTTP client"""
@@ -349,20 +444,20 @@ class ESP32AlertClient:
             )
             
             if response.status_code == 200:
-                print(f"🔊 {alert_type.upper()} ALERT → {payload}")
+                logger.warning(f"🔊 {alert_type.upper()} ALERT → {payload}")  
                 return True
             else:
-                print(f"⚠️  ESP32 responded with status {response.status_code}")
+                logger.error(f"ESP32 responded with status {response.status_code}")
                 return False
                 
         except httpx.TimeoutException:
-            print(f"⏱️  ESP32 request timeout (>{settings.esp32_timeout}s)")
+            logger.error(f"ESP32 request timeout (>{settings.esp32_timeout}s)")
             return False
         except httpx.ConnectError:
-            print(f"❌ Cannot connect to ESP32 at {settings.esp32_audio_url}")
+            logger.error(f"Cannot connect to ESP32 at {settings.esp32_audio_url}")
             return False
         except Exception as e:
-            print(f"❌ ESP32 alert failed: {e}")
+            logger.error(f"ESP32 alert failed: {e}")
             return False
     
     def toggle(self):
@@ -381,6 +476,14 @@ async def memory_cleanup_task(memory: ObjectMemory):
         stats = await memory.get_stats()
         print(f"📊 Memory stats: {stats}")
 
+ # Rate limiter cleanup task       
+
+async def rate_limiter_cleanup_task(limiter: RateLimiter):
+    """Background task to clean up old rate limit entries"""
+    while True:
+        await asyncio.sleep(60)  # Clean up every minute
+        await limiter.cleanup_old_clients()
+
 #  APPLICATION LIFESPAN MANAGEMENT
 
 @asynccontextmanager
@@ -396,6 +499,10 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(
         memory_cleanup_task(app.state.object_memory)
     )
+    # Start rate limiter cleanup task  # ← ADD THIS
+    rate_limit_cleanup_task = asyncio.create_task(
+        rate_limiter_cleanup_task(app.state.rate_limiter)
+    )
     
     print("✅ Application started")
     
@@ -404,6 +511,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     print("🛑 Shutting down application...")
     cleanup_task.cancel()
+    rate_limit_cleanup_task.cancel()
     await app.state.esp32_client.stop()
     cv2.destroyAllWindows()
     print("✅ Application stopped")
@@ -417,6 +525,7 @@ app.state.object_memory = ObjectMemory()
 app.state.esp32_client = ESP32AlertClient()
 app.state.distance_estimator = DistanceEstimator()
 app.state.display_enabled = settings.display_enabled
+app.state.rate_limiter = RateLimiter(max_requests=30, window_seconds=60)
 
 # Load YOLO model
 print(f"🧠 Loading YOLO model from {settings.yolo_model_path}...")
@@ -526,6 +635,15 @@ async def receive_frame(file: UploadFile = File(...)):
     
     Returns detection results and sends alerts to ESP32 if needed
     """
+# Rate limiting
+
+    client_ip = request.client.host if request else "unknown"
+    if not await app.state.rate_limiter.check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Max 30 frames per minute."
+        )
+    
     try:
         contents = await file.read()
         img = Image.open(BytesIO(contents)).convert("RGB")
@@ -534,8 +652,12 @@ async def receive_frame(file: UploadFile = File(...)):
         img_array = np.array(img)
         img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
-        # Detection and tracking
-        results = model.track(img, persist=True)
+        # Detection and tracking (run in thread pool to avoid blocking)
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None,  # Use default ThreadPoolExecutor
+            lambda: model.track(img, persist=True)
+        )
 
         detections = []
         alert_tasks = []  # Collect async alert tasks
@@ -579,7 +701,16 @@ async def receive_frame(file: UploadFile = File(...)):
 
         # Wait for all alerts to complete (with timeout)
         if alert_tasks:
-            await asyncio.wait(alert_tasks, timeout=1.0)
+            done, pending = await asyncio.wait(alert_tasks, timeout=1.0)
+    
+            # Cancel any tasks that didn't complete
+            if pending:
+                logger.warning(f"Cancelling {len(pending)} slow alert tasks")
+                for task in pending:
+                    task.cancel()
+        
+                # Wait for cancellation to complete
+                await asyncio.gather(*pending, return_exceptions=True)
 
         # Display frame with detections
         if app.state.display_enabled:
@@ -592,7 +723,7 @@ async def receive_frame(file: UploadFile = File(...)):
         })
 
     except Exception as e:
-        print(f"❌ Error processing frame: {e}")
+        logger.exception(f"Error processing frame: {e}")
         return JSONResponse({
             "success": False,
             "error": str(e)
@@ -660,12 +791,12 @@ async def fall_alert(request: Request):
     try:
         data = await request.json()
         
-        print("\n ═══════════════════════════════════════")
-        print(" FALL DETECTED!")
-        print(" ═══════════════════════════════════════")
-        print(f"   Timestamp: {data.get('timestamp', 0)}ms")
-        print(f"   Event: {data.get('event', 'fall_detected')}")
-        print(f"   Time: {time.strftime('%H:%M:%S')}")
+        logger.critical("═══════════════════════════════════════")  # ← CHANGE
+        logger.critical("FALL DETECTED!")
+        logger.critical("═══════════════════════════════════════")
+        logger.critical(f"Timestamp: {data.get('timestamp', 0)}ms")
+        logger.critical(f"Event: {data.get('event', 'fall_detected')}")
+        logger.critical(f"Time: {time.strftime('%H:%M:%S')}")
         
         # Trigger audio alert using asasynchron HTTP 
         if app.state.esp32_client.enabled:
@@ -690,17 +821,17 @@ async def fall_alert(request: Request):
 #  MAIN ENTRY POINT
 
 if __name__ == "__main__":
-    print("\n" + "="*60)
-    print("🎯 YOLO Detection Server - Enhanced Version")
-    print("="*60)
-    print(f"📹 Model: {settings.yolo_model_path}")
-    print(f"🎯 Confidence threshold: {settings.confidence_threshold}")
-    print(f"⚠️  Danger distance: {settings.danger_distance_m}m")
-    print(f"🔊 ESP32 URL: {settings.esp32_audio_url}")
-    print(f"📐 Focal length: {settings.camera_focal_length_px}px")
-    print(f"🧹 Memory cleanup: every {settings.memory_cleanup_interval}s")
-    print(f"💾 Max track age: {settings.memory_max_age}s")
-    print("="*60)
+    logger.info("="*60)  # ← CHANGE
+    logger.info("🎯 YOLO Detection Server - Enhanced Version")
+    logger.info("="*60)
+    logger.info(f"📹 Model: {settings.yolo_model_path}")
+    logger.info(f"🎯 Confidence threshold: {settings.confidence_threshold}")
+    logger.info(f"⚠️  Danger distance: {settings.danger_distance_m}m")
+    logger.info(f"🔊 ESP32 URL: {settings.esp32_audio_url}")
+    logger.info(f"📐 Focal length: {settings.camera_focal_length_px}px")
+    logger.info(f"🧹 Memory cleanup: every {settings.memory_cleanup_interval}s")
+    logger.info(f"💾 Max track age: {settings.memory_max_age}s")
+    logger.info("="*60)
     
     if settings.display_enabled:
         print("🎥 Video display: ENABLED")
