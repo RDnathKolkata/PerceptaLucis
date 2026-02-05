@@ -49,7 +49,7 @@ Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
 <img src="https://mirrors.creativecommons.org/presskit/icons/by.svg" width="14" height="14" style="vertical-align: middle; margin-left: 2px;">
 <img src="https://mirrors.creativecommons.org/presskit/icons/nc.svg" width="14" height="14" style="vertical-align: middle; margin-left: 2px;">
 <img src="https://mirrors.creativecommons.org/presskit/icons/sa.svg" width="14" height="14" style="vertical-align: middle; margin-left: 2px;">
-
+CC BY-NC-SA 4.0
 
 Commercial use, monetization, or deployment within paid products or services is **not permitted** without explicit written permission from the author.
 
