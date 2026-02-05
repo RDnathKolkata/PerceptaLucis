@@ -3,6 +3,16 @@ Creative Commons Attribution–NonCommercial–ShareAlike 4.0 International
 
 © 2026 Rajdeep Debnath
 
+Scope of License
+
+This license applies to the documentation, hardware designs, schematics,
+and other non-code assets of the Percepta™ Lucis project.
+
+Source code, where present, is provided under the same non-commercial terms
+unless otherwise stated, and remains subject to the project’s trademark
+and commercial-use restrictions.
+
+
 This work is licensed under the Creative Commons Attribution–NonCommercial–
 ShareAlike 4.0 International License.
 
@@ -29,8 +39,9 @@ measures that legally restrict others from doing anything the license permits.
 
 Commercial Use Notice:
 Commercial use, distribution, SaaS deployment, bundling with paid products,
-or monetization of this software (or derivatives) is strictly prohibited
-without explicit written permission from the copyright holder.
+or monetization of this work (or derivatives) is not permitted under this
+license without explicit written permission from the copyright holder.
+
 
 Commercial licenses may be granted separately upon request.
 
