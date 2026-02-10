@@ -565,6 +565,3 @@
 //     lastWiFiCheck = millis();
 //   }
 // }
-
-
-/*
